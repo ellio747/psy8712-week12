@@ -11,25 +11,27 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Script Settings and Resources
 ```{r}
+set.seed(123)            # reproducibility for model training
 library(tidyverse)       # data science tools
 library(httr)            # data extract from Reddit JSON
 library(jsonlite)        # data extract from Reddit JSON
 library(tm)              # pre-processing
-library(qdap)            # pre-processing
+library(qdap)            # pre-processing # OpenJDK is an open-source solution for these java invoking libraries via University software support
 library(textclean)       # pre-processing (emojis)
 library(textstem)        # pre-processing
-library(RWeka)           # n-gram DTM
+library(RWeka)           # n-gram DTM # OpenJDK is an open-source solution for these java invoking libraries via University software support
 library(stm)             # tuning a LDA Model (Topic Extraction)
+library(caret)           # machine learning 
 ```
 
 
 # Data Import and Cleaning
 ```{r}
-# url <- "https://www.reddit.com/r/IOPsychology/.json?limit=100"
+# url <- "https://www.reddit.com/r/IOPsychology/.json?limit=100" # establishes the url, set to limit=100
 # after <- NULL
 # all_posts <- list()
 # 
-# for (i in 1:6) {  
+# for (i in 1:6) {  # full disclosure, I needed an AI solution for this. I struggled trying to use RedditExtractoR because of 429 errors. When I queried AI, I had about three options to try to use in order to get this data; I balanced choices of efficiency, clarity and accuracy. Examining the output from this code, I obtain what I am after regarding a year's worth of posts. I also do not have a Reddit account and therefore wanted a solution that did not require the API calls required with a user/password. 
 #   full_url <- paste0(url, if (!is.null(after)) paste0("&after=", after) else "")
 #   res <- fromJSON(full_url)
 #   posts <- res$data$children$data
@@ -39,81 +41,159 @@ library(stm)             # tuning a LDA Model (Topic Extraction)
 #   Sys.sleep(1)  # important to avoid rate limits
 # }
 # 
-# week12_tbl <- bind_rows(all_posts) %>% 
-#   select(title, ups, created_utc) %>% 
+# week12_tbl <- bind_rows(all_posts) %>% # creates week12_tbl
+#   select(title, ups, created_utc) %>% # selecting title, upvotes, and date post created
 #   mutate(
-#     created_utc = as.POSIXct(created_utc, origin = "1970-01-01")
+#     created_utc = as.POSIXct(created_utc, origin = "1970-01-01") # converts to POSIX.ct for date computations
 #   ) %>% 
-#   filter(created_utc > Sys.Date() - 365) %>% 
-#   select(-created_utc) %>% 
-#   write_csv("../data/iopsych_scrape_data.csv")
+#   filter(created_utc > Sys.Date() - 365) %>% # selects from current to one year back
+#   select(-created_utc) %>% # removes date created variable after filtering
+#   write_csv("../data/iopsych_scrape_data.csv") # writes to .csv in the data folder
 
-week12_tbl <- read_csv("../data/iopsych_scrape_data.csv")
+week12_tbl <- read_csv("../data/iopsych_scrape_data.csv") # reloads, following commenting out
 ```
 
 
 ```{r corpus generation}
-io_corpus_original <- VCorpus(VectorSource(week12_tbl$title))
+# Step 1: Data Wrangling/Munging
+io_corpus_original <- VCorpus(VectorSource(week12_tbl$title)) # creates a corups using command from `tm` library
 
-io_corpus <- io_corpus_original %>% 
-  tm_map(content_transformer(replace_abbreviation)) %>% #("eu", "phd", "bs", "mba")
-  tm_map(content_transformer(replace_contraction)) %>%
-  tm_map(content_transformer(str_to_lower)) %>%
-  tm_map(content_transformer(replace_emoji)) %>%
-  tm_map(removeNumbers) %>%
-  tm_map(removePunctuation) %>%
-  tm_map(content_transformer(lemmatize_words)) %>% #from textstem so needs content_transformer() wrapper
+# Step 2: Pre-Processing
+io_corpus <- io_corpus_original %>% # preprocessing pipeline
+  tm_map(content_transformer(str_to_lower)) %>% #conversion to lower first for consistency
+  # tm_map(content_transformer(replace_abbreviation)) %>% # remove abbreviations; commented out because it was overly aggressive
+  tm_map(content_transformer(replace_contraction)) %>% # remove contractions
+  # tm_map(content_transformer(replace_emoji)) %>% # replace emojis; commented out because it was overly aggressive
+  tm_map(removeNumbers) %>% # remove numbers that are not relevant to topics
+  tm_map(removePunctuation) %>% # leave out punctuation
+  tm_map(content_transformer(lemmatize_words)) %>% #from textstem so needs content_transformer() wrapper; #lemmatization of words to conform words
   tm_map(removeWords, 
          c(stopwords("en"), 
-           "io", "i/o", "i-o", "I/Os","industrial", "organizational",
-           "psych", "psychology", "psychologis[ts]", "/r/IOpsychology")) %>% #added common IO Psych words
-  tm_map(stripWhitespace) %>% 
-  tm_map(stemDocument, language="english")
+           "io", "i/o", "i-o", "I/Os","industrial", "organizational")) %>% 
+           # "psych", "psychology", "psychologis[ts]", "/r/IOpsychology")) %>% #added common IO Psych words
+  tm_map(stripWhitespace)   # remove whitespace
+  # tm_map(stemDocument, language="english") # remove stems; commented out because it was overly aggressive
 ```
 
 ```{r compre them function}
+# Compare them function created, by setting i as random number within length of corp1 (which in our case is same length as corp2)
 compare_them <- function(corp1, corp2) {
   i <- sample(1:length(corp1), 1)
-  print(corp1[[i]]$content)
-  print(corp2[[i]]$content)
+  print(corp1[[i]]$content) # prints content of ith term in corp1
+  print(corp2[[i]]$content) # prints content of ith term in corp2
 }
 ```
 
 ```{r }
-compare_them(io_corpus_original, io_corpus)
-```
-
-```{r create dtm}
-io_dtm <- DocumentTermMatrix(io_corpus)
-io_dtm <- as.matrix(io_dtm)
+compare_them(io_corpus_original, io_corpus) # reran compare_them function several times to evaluate 
 ```
 
 ```{r}
-myTokenizer <- function(x) { NGramTokenizer(x, Weka_control(min=1, max=2)) }
-io_slim_dtm <- DocumentTermMatrix(
+# Step 3: Create a Dataset
+myTokenizer <- function(x) { NGramTokenizer(x, Weka_control(min=1, max=2)) } # uses tokenization for document term matrix with unigrams and bigrams
+io_dtm <- DocumentTermMatrix( # new io_dtm created
   io_corpus, 
   control = list(tokenize = myTokenizer))
-# slimmed_dtm <- removeSparseTerms(DTM, .97)
-# DTM_tbl <- slimmed_dtm %>% as.matrix %>% as_tibble
+
+io_slim_dtm <- removeSparseTerms(io_dtm, .97) # removes sparsity with reasonable N/k ratio
+DTM_tbl <- io_slim_dtm %>% as.matrix %>% as_tibble # turns this dataset into a tibble
+
+# library(slam)
+# row_totals <- row_sums(io_slim_dtm)
+# keep <- row_totals > 0
+# 
+# io_slim_dtm_filtered <- io_slim_dtm[keep, ]
+# texts_aligned <- week12_tbl$title[keep]
+# doc_ids <- which(keep)  # preserves original row mapping
 ```
 
 
 # Analysis
 ```{r analysis}
-dtm_stm <- readCorpus(io_slim_dtm, type="slam")
-kresult <- searchK(
+# Step 4: Analysis (and visualization)
+dtm_stm <- readCorpus(io_dtm, type="slam") # this implements the correct form for LDA
+kresult <- searchK( # runs the LDA
   dtm_stm$documents,
   dtm_stm$vocab,
   K = seq(2, 20, by = 2)
 )
-plot(kresult)
-topic_model <- stm(dtm_stm$documents, 
+plot(kresult) # plots the diagnostic plots; the elbow topic looks like 6 or 7
+
+topic_model <- stm(dtm_stm$documents, # fit the final model
                    dtm_stm$vocab, 
-                   7)
+                   6) # based on the PCA-scree-plot-like "elbow" from the plot
+
+# Below code was obtained from slide 26
+labelTopics(topic_model, n=10) # prints the topic labels and 
+findThoughts(topic_model, texts = week12_tbl$title, n=3) # outputs three exampels from each topic
+plot(topic_model, type="summary", n=5) # plots the topic models
+topicCorr(topic_model) # provides intercorrelations of topic models, evaluating correlational strength of topics
+plot(topicCorr(topic_model)) # this is an output that shows the graphical relationship between topics
+
+theta <- topic_model$theta # this calls the extracted probability 
+
+# Assign topic labels based on call from findThoughts(topic_model) output
+topic_labels = c("General Advice", 
+                  "Job Market & Post Graduate Options", 
+                  "Career Path Advice", 
+                  "IO Psychology Titles", 
+                  "Interesting Articles & Scholarly Thoughts", 
+                  "Research Opportunities")
+```
+
+```{r topics tibble}
+# Topic Table
+topics_tbl <- tibble( 
+  doc_id = sapply(io_corpus_original, meta, "id"), # io_corpus document id original line number from original input vector/data frame
+  original = sapply(io_corpus_original, content), # original post title
+  topic = apply(theta, 1, which.max), # LDA topic number
+  topic_label = topic_labels[apply(theta, 1, which.max)], # selects the appropriate topic labels
+  probability = apply(theta, 1, max), # the probability that label belongs to the topic
+  upvotes = week12_tbl$ups, # the number of upvotes for the document
+)
+
+#Explain in detail the specific reasoning process you used to determine the final number of topics. 
+#Explain in detail the specific reasoning process for the topic labels you selected.
+
+```
+
+```{r machine learning model}
+# Create Train and Holdout Subsets
+train_index <- createDataPartition(token_df$upvotes, p = .25, list=F)
+# Create training for tokens
+train_tokens <- token_df[train_index, ]
+test_tokens  <- token_df[-train_index, ]
+# Create training for topics
+train_topics <- topic_df[train_index, ]
+test_topics  <- topic_df[-train_index, ]
+
+mod1 <- train(
+    upvotes ~ , 
+    gss_training, 
+    na.action = na.pass, 
+    method = "ranger", 
+    preProcess = c("medianImpute","center","nzv", "scale"), 
+    tuneLength = 3,
+    trControl=trainControl(
+      method="cv", number=10, verboseIter=T 
+    )
+    
+pred1 <- predict(model1, newdata = gss_holdout, na.action = na.pass) 
+
+table1_tbl <- tibble( 
+  algo = c(model1$method, model2$method), 
+  cv_rsq = str_remove(round(c(getTrainPerf(model1)$TrainRsquared, 
+                              getTrainPerf(model2)$TrainRsquared), 2), "^0"),
+  ho_rsq = str_remove(round(c(postResample(pred1, gss_holdout$mosthrs)["Rsquared"], 
+                              postResample(pred2, gss_holdout$mosthrs)["Rsquared"]), 2), "^0")
+) #%>% 
+  #write_csv(file = "../out/table1.csv") 
 ```
 
 
-
 # Visualization 
-
-# Publication
+```{r}
+wordCounts <- colSums(DTM_tbl)
+wordNames <- names(DTM_tbl)
+wordcloud::wordcloud(wordNames, wordCounts, max.words = 50)
+```
