@@ -2,7 +2,15 @@
 title: "week12"
 author: "Ben Elliott"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  html_document:
+    theme:
+      bootswatch: cosmo
+      fg: "#0000FF"
+      bg: "#FFFFFF"
+    toc: true
+    toc_float: true
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
@@ -10,7 +18,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 # Script Settings and Resources
-```{r}
+```{r script settings and resources, message = FALSE, warning = FALSE, error = FALSE, results = "hide", echo = TRUE}
 set.seed(123)            # reproducibility for model training
 library(tidyverse)       # data science tools
 library(httr)            # data extract from Reddit JSON
@@ -26,7 +34,7 @@ library(caret)           # machine learning
 
 
 # Data Import and Cleaning
-```{r}
+```{r data cleaning and import}
 # url <- "https://www.reddit.com/r/IOPsychology/.json?limit=100" # establishes the url, set to limit=100
 # after <- NULL
 # all_posts <- list()
@@ -50,7 +58,10 @@ library(caret)           # machine learning
 #   select(-created_utc) %>% # removes date created variable after filtering
 #   write_csv("../data/iopsych_scrape_data.csv") # writes to .csv in the data folder
 
-week12_tbl <- read_csv("../data/iopsych_scrape_data.csv") # reloads, following commenting out
+week12_tbl <- read_csv("../data/iopsych_scrape_data.csv") %>%  # reloads, following commenting out
+  mutate(doc_id = row_number()) # added a row number to assist with indexing and comparing
+
+doc_ids <- week12_tbl$doc_id # all document ids
 ```
 
 
@@ -66,11 +77,15 @@ io_corpus <- io_corpus_original %>% # preprocessing pipeline
   # tm_map(content_transformer(replace_emoji)) %>% # replace emojis; commented out because it was overly aggressive
   tm_map(removeNumbers) %>% # remove numbers that are not relevant to topics
   tm_map(removePunctuation) %>% # leave out punctuation
-  tm_map(content_transformer(lemmatize_words)) %>% #from textstem so needs content_transformer() wrapper; #lemmatization of words to conform words
-  tm_map(removeWords, 
-         c(stopwords("en"), 
-           "io", "i/o", "i-o", "I/Os","industrial", "organizational")) %>% 
-           # "psych", "psychology", "psychologis[ts]", "/r/IOpsychology")) %>% #added common IO Psych words
+  tm_map(content_transformer(function(x) { # this anonymous function removes all the IO Psych-like words using regular expressions and str_replace, identifying the stem and replacing with whitespace (to be removed later)
+    x <- str_replace_all(x, "\\bi\\s*o\\b", " ")
+    x <- str_replace_all(x, "industrial\\s*organizational", " ")
+    x <- str_replace_all(x, "\\bpsych\\w*\\b", " ")
+    x <- str_replace_all(x, "riopsychology", " ")
+    x
+  })) %>% 
+tm_map(content_transformer(lemmatize_words)) %>% #from textstem so needs content_transformer() wrapper; #lemmatization of words to conform words
+  tm_map(removeWords, c(stopwords("en"))) %>% 
   tm_map(stripWhitespace)   # remove whitespace
   # tm_map(stemDocument, language="english") # remove stems; commented out because it was overly aggressive
 ```
@@ -84,34 +99,37 @@ compare_them <- function(corp1, corp2) {
 }
 ```
 
-```{r }
+```{r compare them function}
 compare_them(io_corpus_original, io_corpus) # reran compare_them function several times to evaluate 
 ```
 
-```{r}
+```{r dataset creation}
 # Step 3: Create a Dataset
 myTokenizer <- function(x) { NGramTokenizer(x, Weka_control(min=1, max=2)) } # uses tokenization for document term matrix with unigrams and bigrams
 io_dtm <- DocumentTermMatrix( # new io_dtm created
   io_corpus, 
   control = list(tokenize = myTokenizer))
 
+# Remove spares terms
 io_slim_dtm <- removeSparseTerms(io_dtm, .97) # removes sparsity with reasonable N/k ratio
-DTM_tbl <- io_slim_dtm %>% as.matrix %>% as_tibble # turns this dataset into a tibble
 
-# library(slam)
-# row_totals <- row_sums(io_slim_dtm)
-# keep <- row_totals > 0
-# 
-# io_slim_dtm_filtered <- io_slim_dtm[keep, ]
-# texts_aligned <- week12_tbl$title[keep]
-# doc_ids <- which(keep)  # preserves original row mapping
+# Removing empty rows from sparse dtm; aligning with the doc_ids from the original table for further analysis
+tokenCounts <- apply(io_slim_dtm, 1, sum)
+kept_docs <- tokenCounts > 0
+cleaned_dtm <- io_slim_dtm[kept_docs, ]
+kept_doc_ids <- doc_ids[kept_docs]
+
+# Ensure text alignment between dtm and original document ids
+texts_aligned <- week12_tbl %>%
+  filter(doc_id %in% kept_doc_ids) %>%
+  arrange(match(doc_id, kept_doc_ids)) 
 ```
 
 
 # Analysis
-```{r analysis}
+```{r analysis, echo=FALSE, message=FALSE, warning=FALSE}
 # Step 4: Analysis (and visualization)
-dtm_stm <- readCorpus(io_dtm, type="slam") # this implements the correct form for LDA
+dtm_stm <- readCorpus(io_slim_dtm, type="slam") # this implements the correct form for LDA
 kresult <- searchK( # runs the LDA
   dtm_stm$documents,
   dtm_stm$vocab,
@@ -124,76 +142,140 @@ topic_model <- stm(dtm_stm$documents, # fit the final model
                    6) # based on the PCA-scree-plot-like "elbow" from the plot
 
 # Below code was obtained from slide 26
-labelTopics(topic_model, n=10) # prints the topic labels and 
-findThoughts(topic_model, texts = week12_tbl$title, n=3) # outputs three exampels from each topic
-plot(topic_model, type="summary", n=5) # plots the topic models
-topicCorr(topic_model) # provides intercorrelations of topic models, evaluating correlational strength of topics
+labelTopics(topic_model, n=10) # prints 10 words from each topic and examined FREX for labeling
+findThoughts(topic_model, texts = texts_aligned$title, n = 3) # outputs three examples from each topic
+plot(topic_model, type="summary", n=4) # plots the topic models
+topicCorr(topic_model) # provides intercorrelations of topic models, evaluating correlation strength of topics
 plot(topicCorr(topic_model)) # this is an output that shows the graphical relationship between topics
 
 theta <- topic_model$theta # this calls the extracted probability 
 
 # Assign topic labels based on call from findThoughts(topic_model) output
-topic_labels = c("General Advice", 
-                  "Job Market & Post Graduate Options", 
+topic_labels = c("General Career Advice", 
+                  "PhD Opportunities, Advice", 
                   "Career Path Advice", 
-                  "IO Psychology Titles", 
-                  "Interesting Articles & Scholarly Thoughts", 
-                  "Research Opportunities")
+                  "Professional Networking Help", 
+                  "Community Discussions & Suggested Readings", 
+                  "Applied Workplace Issues")
 ```
 
 ```{r topics tibble}
 # Topic Table
 topics_tbl <- tibble( 
-  doc_id = sapply(io_corpus_original, meta, "id"), # io_corpus document id original line number from original input vector/data frame
-  original = sapply(io_corpus_original, content), # original post title
+  doc_id = texts_aligned$doc_id, # doc_ids retained from the original corpus
+  original = texts_aligned$title, # original post title
   topic = apply(theta, 1, which.max), # LDA topic number
   topic_label = topic_labels[apply(theta, 1, which.max)], # selects the appropriate topic labels
   probability = apply(theta, 1, max), # the probability that label belongs to the topic
-  upvotes = week12_tbl$ups, # the number of upvotes for the document
+  upvotes = texts_aligned$ups, # the number of upvotes for the document
 )
 
-#Explain in detail the specific reasoning process you used to determine the final number of topics. 
-#Explain in detail the specific reasoning process for the topic labels you selected.
+#Q1: Explain in detail the specific reasoning process you used to determine the final number of topics. 
+## A1: My specific process is that I ran the model first with 7 topics based on my initial code and the output results of the kresult plot, examining the “elbow” across the four plots. It resulted in many topics that have overlap, both from analyzing the content as well as the empirical correlations. I reduced to 5 topics, but felt as though they became too similar in content overlap. I settled on 6, and while it still feels imperfect, I believe it is suitable given the data pre-processing steps I took (I had done a previous round where I was not as aggressive at removing “psychology” terms and got a large amount of topic flooding from these terms). 
+#Q2: Explain in detail the specific reasoning process for the topic labels you selected.
+##A2: To label the topics, I first used the plot of the topic models to get a general idea. Then I examined the FREX for unique words in each topic. I began to create labels based on an inductive categorization. It was helpful to look at the original strings to gather nuance. I landed on six labels and then, asked AI to do the same process with my output from line 138 and line 139. I fine tuned my labels slightly. I also feel as though topic 1 & 3 are too closely related, so if I would have had more time I would have examined ways to reduce this or merge the labels (simply going to 5 topics did not help, but only increased the issue).
 
 ```
 
-```{r machine learning model}
+```{r machine learning model, echo=FALSE, message=FALSE, warning=FALSE}
+# Create DTM Matrix
+cleaned_m <- as.matrix(cleaned_dtm)
+
+# Align to Topics Model
+model_df <- topics_tbl %>%
+  filter(doc_id %in% kept_doc_ids) %>%
+  arrange(match(doc_id, kept_doc_ids))
+
+# Tokens as data frame
+token_df <- as.data.frame(cleaned_m)
+
+# Add outcome
+token_df$upvotes <- model_df$upvotes
+
+# Topics data frame
+topic_df <- model_df %>%
+  select(topic, upvotes)
+
+# Tokens + Topics combined
+both_df <- token_df %>%
+  bind_cols(topic = model_df$topic)
+
 # Create Train and Holdout Subsets
-train_index <- createDataPartition(token_df$upvotes, p = .25, list=F)
-# Create training for tokens
+train_index <- createDataPartition(model_df$upvotes, p = .25, list=F)
+
+# Tokens
 train_tokens <- token_df[train_index, ]
 test_tokens  <- token_df[-train_index, ]
-# Create training for topics
+
+# Topics
 train_topics <- topic_df[train_index, ]
 test_topics  <- topic_df[-train_index, ]
 
-mod1 <- train(
-    upvotes ~ , 
-    gss_training, 
-    na.action = na.pass, 
-    method = "ranger", 
-    preProcess = c("medianImpute","center","nzv", "scale"), 
-    tuneLength = 3,
-    trControl=trainControl(
-      method="cv", number=10, verboseIter=T 
-    )
-    
-pred1 <- predict(model1, newdata = gss_holdout, na.action = na.pass) 
+# Tokens + Topics
+train_both <- both_df[train_index, ]
+test_both  <- both_df[-train_index, ]
 
-table1_tbl <- tibble( 
-  algo = c(model1$method, model2$method), 
-  cv_rsq = str_remove(round(c(getTrainPerf(model1)$TrainRsquared, 
-                              getTrainPerf(model2)$TrainRsquared), 2), "^0"),
-  ho_rsq = str_remove(round(c(postResample(pred1, gss_holdout$mosthrs)["Rsquared"], 
-                              postResample(pred2, gss_holdout$mosthrs)["Rsquared"]), 2), "^0")
-) #%>% 
-  #write_csv(file = "../out/table1.csv") 
+# Run Model with Tokens
+model_tokens <- train(
+  upvotes ~ .,
+  data = train_tokens,
+  na.action = na.pass,
+  method = "glmnet", 
+  preProcess = c("center","nzv", "scale"), 
+  tuneGrid = expand.grid( 
+    alpha = c(0,1), 
+    lambda = seq(0.0001, 0.1, length = 10) 
+  ),
+  trControl = trainControl(
+    method = "cv",
+    number = 10,
+    verboseIter = TRUE
+  )
+)
+
+model_both <- train(
+  upvotes ~ .,
+  data = train_both,
+  na.action = na.pass,
+  method = "glmnet", 
+  preProcess = c("center","nzv", "scale"), 
+  tuneGrid = expand.grid( 
+    alpha = c(0,1), 
+    lambda = seq(0.0001, 0.1, length = 10) 
+  ),
+  trControl = trainControl(
+    method = "cv",
+    number = 10,
+    verboseIter = TRUE
+  )
+)
+
+# Summary of 10-fold CV results
+summary(resamples(list(model_tokens, model_both)))
+
+# Compare to holdout CV results
+pred_tokens <- predict(model_tokens, newdata = test_tokens)
+pred_both <- predict(model_both, newdata = test_both)
+
+table1_tbl <- tibble( # I modified a tibble for printing results, very similar to past weeks. 
+  algo = c(model_tokens$method, model_both$method), 
+  cv_rsq = str_remove(round(c(getTrainPerf(model_tokens)$TrainRsquared, 
+                              getTrainPerf(model_both)$TrainRsquared), 2), "^0"),
+  ho_rsq = str_remove(round(c(postResample(pred_tokens, test_tokens$upvotes)["Rsquared"], 
+                              postResample(pred_both, test_both$upvotes)["Rsquared"]), 2), "^0")
+)
+
+# # Interpretation:
+# The tokens-only model slightly outperformed the tokens-plus-topics model on the holdout set (R² = 0.088 vs 0.086) when using a caret-based elastic net machnie learning model. This indicates that adding the topic variable did not improve predictive accuracy beyond what was already captured by the token features alone. This is probably due to the fact that the topic labels were generated through a compression of the titles into tokens. These tokens already contain the important information for prediction, while adding a single dominant topic is assigning a label where there may be much more underlying nuance lost. The low R² overall on out of sample prediction suggests that the model may be overfit to the training data. Potentially exploring non-linear options would aid in answering the question
 ```
 
 
 # Visualization 
 ```{r}
+DTM_tbl <- io_dtm %>% as.matrix %>% as_tibble # turns this dataset into a tibble
 wordCounts <- colSums(DTM_tbl)
 wordNames <- names(DTM_tbl)
 wordcloud::wordcloud(wordNames, wordCounts, max.words = 50)
+
+## Interpretation: Overall on the original corpus, io_dtm, the word cloud produced demonstrates that this is a forum for networking through seeking and providing advice, help, identifying needs, and talking about general support for the field of I/O Psychology. It is clearly a source for those in applied and academic settings within IO to come to find answers about the questions regarding their school & degree choices, post-graduate early career options, and engage in discussion topics. 
 ```
