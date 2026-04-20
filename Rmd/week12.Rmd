@@ -263,7 +263,8 @@ table1_tbl <- tibble( # I modified a tibble for printing results, very similar t
                               getTrainPerf(model_both)$TrainRsquared), 2), "^0"),
   ho_rsq = str_remove(round(c(postResample(pred_tokens, test_tokens$upvotes)["Rsquared"], 
                               postResample(pred_both, test_both$upvotes)["Rsquared"]), 2), "^0")
-)
+) %>% 
+  write_csv("../out/table1.csv")
 
 # # Interpretation:
 # The tokens-only model slightly outperformed the tokens-plus-topics model on the holdout set (R² = 0.088 vs 0.086) when using a caret-based elastic net machnie learning model. This indicates that adding the topic variable did not improve predictive accuracy beyond what was already captured by the token features alone. This is probably due to the fact that the topic labels were generated through a compression of the titles into tokens. These tokens already contain the important information for prediction, while adding a single dominant topic is assigning a label where there may be much more underlying nuance lost. The low R² overall on out of sample prediction suggests that the model may be overfit to the training data. Potentially exploring non-linear options would aid in answering the question
