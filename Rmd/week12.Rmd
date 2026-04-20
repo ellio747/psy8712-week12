@@ -100,7 +100,7 @@ compare_them <- function(corp1, corp2) {
 ```
 
 ```{r compare them function}
-compare_them(io_corpus_original, io_corpus) # reran compare_them function several times to evaluate 
+compare_them(io_corpus_original, io_corpus) # re-ran compare_them() function several times to evaluate 
 ```
 
 ```{r dataset creation}
@@ -173,7 +173,7 @@ topics_tbl <- tibble(
 #Q1: Explain in detail the specific reasoning process you used to determine the final number of topics. 
 ## A1: My specific process is that I ran the model first with 7 topics based on my initial code and the output results of the kresult plot, examining the “elbow” across the four plots. It resulted in many topics that have overlap, both from analyzing the content as well as the empirical correlations. I reduced to 5 topics, but felt as though they became too similar in content overlap. I settled on 6, and while it still feels imperfect, I believe it is suitable given the data pre-processing steps I took (I had done a previous round where I was not as aggressive at removing “psychology” terms and got a large amount of topic flooding from these terms). 
 #Q2: Explain in detail the specific reasoning process for the topic labels you selected.
-##A2: To label the topics, I first used the plot of the topic models to get a general idea. Then I examined the FREX for unique words in each topic. I began to create labels based on an inductive categorization. It was helpful to look at the original strings to gather nuance. I landed on six labels and then, asked AI to do the same process with my output from line 138 and line 139. I fine tuned my labels slightly. I also feel as though topic 1 & 3 are too closely related, so if I would have had more time I would have examined ways to reduce this or merge the labels (simply going to 5 topics did not help, but only increased the issue).
+##A2: To label the topics, I first used the plot of the topic models to get a general idea. Then I examined the FREX for unique words in each topic. I began to create labels based on an inductive categorization. It was helpful to look at the original strings to gather nuance. I landed on six labels and then, asked AI to do the same process with my output from line 138 and line 139. I fine tuned my labels slightly. I also feel as though topic 1 & 3 are too closely related (highly correlated), so if I would have had more time I would have examined ways to reduce this or merge the labels (simply going to 5 topics did not help, but only increased the issue).
 
 ```
 
